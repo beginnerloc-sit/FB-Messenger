@@ -2,7 +2,6 @@ import hmac
 import logging
 import os
 import re
-from datetime import datetime
 from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 
 import httpx
@@ -10,13 +9,6 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
-
-try:
-    from google.oauth2 import service_account
-    from google.auth.transport.requests import Request as GoogleAuthRequest
-except ImportError:
-    service_account = None
-    GoogleAuthRequest = None
 
 VERIFY_TOKEN = "25052026"
 PAGE_ACCESS_TOKEN = os.getenv("PAGE_ACCESS_TOKEN", "").strip()
@@ -27,12 +19,8 @@ GRAPH_BASE = f"https://graph.facebook.com/{GRAPH_API_VERSION}"
 SEND_API_URL = f"{GRAPH_BASE}/me/messages"
 PROFILE_API_URL = GRAPH_BASE
 
-# Google Sheets via service account.
-SHEETS_SPREADSHEET_ID = os.getenv("SHEETS_SPREADSHEET_ID", "").strip()
-SHEETS_RANGE = os.getenv("SHEETS_RANGE", "Messages!A:G").strip()
-GOOGLE_SERVICE_ACCOUNT_JSON = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
-SHEETS_SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
-SHEETS_HEADER = ["received_at", "fb_timestamp", "sender_id", "name", "phone", "message", "message_id"]
+# Google Sheets via Apps Script Web App.
+SHEET_WEBHOOK_URL = os.getenv("SHEET_WEBHOOK_URL", "").strip()
 
 # Vietnam mobile/landline numbers in local 0-prefix form are 10 digits.
 # Accept +84, 84, or 0 followed by 9 more digits. Guard with non-digit
@@ -119,70 +107,15 @@ async def send_text_message(client: httpx.AsyncClient, recipient_id: str, text: 
     return {"status_code": resp.status_code, "body": resp.text}
 
 
-_sheets_creds = None
-
-
-def get_sheets_access_token() -> Optional[str]:
-    global _sheets_creds
-    if not (SHEETS_SPREADSHEET_ID and GOOGLE_SERVICE_ACCOUNT_JSON and service_account):
-        return None
-    if _sheets_creds is None:
-        if not os.path.isfile(GOOGLE_SERVICE_ACCOUNT_JSON):
-            logger.error("Service account JSON not found at %s", GOOGLE_SERVICE_ACCOUNT_JSON)
-            return None
-        _sheets_creds = service_account.Credentials.from_service_account_file(
-            GOOGLE_SERVICE_ACCOUNT_JSON, scopes=SHEETS_SCOPES
-        )
-    if not _sheets_creds.valid:
-        _sheets_creds.refresh(GoogleAuthRequest())
-    return _sheets_creds.token
-
-
 async def append_to_sheet(
     client: httpx.AsyncClient,
     rows: List[Dict[str, Any]],
 ) -> Dict[str, Any]:
-    if not SHEETS_SPREADSHEET_ID:
-        logger.warning("SHEETS_SPREADSHEET_ID not set; skipping sheet write")
-        return {"skipped": "no_spreadsheet_id"}
-    if not GOOGLE_SERVICE_ACCOUNT_JSON:
-        logger.warning("GOOGLE_SERVICE_ACCOUNT_JSON not set; skipping sheet write")
-        return {"skipped": "no_credentials"}
-    if service_account is None:
-        logger.error("google-auth not installed; cannot write to sheet")
-        return {"skipped": "google_auth_missing"}
-
+    if not SHEET_WEBHOOK_URL:
+        logger.warning("SHEET_WEBHOOK_URL not set; skipping sheet write")
+        return {"skipped": "no_url"}
     try:
-        token = get_sheets_access_token()
-        if not token:
-            return {"skipped": "no_token"}
-
-        now = datetime.utcnow().isoformat() + "Z"
-        values = [
-            [
-                now,
-                r.get("timestamp", ""),
-                r.get("sender_id", ""),
-                r.get("name", ""),
-                r.get("phone", ""),
-                r.get("message", ""),
-                r.get("message_id", ""),
-            ]
-            for r in rows
-        ]
-        url = (
-            f"https://sheets.googleapis.com/v4/spreadsheets/{SHEETS_SPREADSHEET_ID}"
-            f"/values/{SHEETS_RANGE}:append"
-        )
-        resp = await client.post(
-            url,
-            params={
-                "valueInputOption": "USER_ENTERED",
-                "insertDataOption": "INSERT_ROWS",
-            },
-            headers={"Authorization": f"Bearer {token}"},
-            json={"values": values},
-        )
+        resp = await client.post(SHEET_WEBHOOK_URL, json={"rows": rows}, follow_redirects=True)
         if resp.status_code >= 400:
             logger.error("Sheets API error %s: %s", resp.status_code, resp.text)
         else:
