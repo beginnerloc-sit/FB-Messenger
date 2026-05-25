@@ -98,10 +98,43 @@ if [ ! -d "$VENV_PATH" ]; then
     exit 1
 fi
 
+UNIT_PATH="/etc/systemd/system/${SERVICE_NAME}.service"
+SUDO=""
+if [ "$(id -u)" -ne 0 ]; then
+    SUDO="sudo"
+fi
+
+install_systemd_unit() {
+    local run_user
+    run_user="$(id -un)"
+    log "Installing systemd unit at $UNIT_PATH"
+    $SUDO tee "$UNIT_PATH" > /dev/null <<UNIT
+[Unit]
+Description=${SERVICE_NAME} (FastAPI)
+After=network.target
+
+[Service]
+User=${run_user}
+WorkingDirectory=${PROJECT_DIR}
+EnvironmentFile=${ENV_FILE}
+Environment=PORT=${PORT}
+ExecStart=${VENV_PATH}/bin/uvicorn main:app --host 0.0.0.0 --port \${PORT}
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+    $SUDO systemctl daemon-reload
+    $SUDO systemctl enable "$SERVICE_NAME" >/dev/null 2>&1 || true
+}
+
 if ! systemctl list-unit-files | grep -q "^${SERVICE_NAME}.service"; then
-    err "systemd service '$SERVICE_NAME' not found"
-    echo "Make sure /etc/systemd/system/${SERVICE_NAME}.service exists"
-    exit 1
+    warn "systemd service '$SERVICE_NAME' not found — installing it now"
+    # .env must exist before the unit references it via EnvironmentFile.
+    touch "$ENV_FILE"
+    chmod 600 "$ENV_FILE"
+    install_systemd_unit
 fi
 
 # --- Show current state ---
@@ -160,10 +193,10 @@ update_env_var "PORT" "$PORT"
 # --- Restart or reload service ---
 if [ "$USE_RELOAD" = true ]; then
     log "Reloading $SERVICE_NAME (zero-downtime)..."
-    systemctl reload "$SERVICE_NAME"
+    $SUDO systemctl reload "$SERVICE_NAME"
 else
     log "Restarting $SERVICE_NAME..."
-    systemctl restart "$SERVICE_NAME"
+    $SUDO systemctl restart "$SERVICE_NAME"
 fi
 
 # --- Wait briefly and check status ---
