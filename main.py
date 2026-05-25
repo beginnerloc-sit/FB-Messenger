@@ -6,8 +6,9 @@ from datetime import datetime
 from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 
 import httpx
-from fastapi import FastAPI, Header, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
 
 try:
@@ -269,13 +270,15 @@ async def receive_message(verify_token: str, request: Request):
     return {"status": "ok", "extracted": extracted, "sheet": sheet_result}
 
 
-def check_admin_auth(authorization: Optional[str]) -> None:
+bearer_scheme = HTTPBearer(description="Admin password (from PASSWORD env)")
+
+
+def require_admin(
+    creds: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+) -> None:
     if not ADMIN_PASSWORD:
         raise HTTPException(status_code=503, detail="Admin password not configured")
-    if not authorization or not authorization.lower().startswith("bearer "):
-        raise HTTPException(status_code=401, detail="Missing Authorization: Bearer <password>")
-    token = authorization.split(" ", 1)[1].strip()
-    if not hmac.compare_digest(token, ADMIN_PASSWORD):
+    if not hmac.compare_digest(creds.credentials, ADMIN_PASSWORD):
         raise HTTPException(status_code=403, detail="Invalid password")
 
 
@@ -306,13 +309,8 @@ class BackfillRequest(BaseModel):
     dry_run: bool = False
 
 
-@app.post("/admin/backfill")
-async def admin_backfill(
-    req: BackfillRequest,
-    authorization: Optional[str] = Header(None),
-):
-    check_admin_auth(authorization)
-
+@app.post("/admin/backfill", dependencies=[Depends(require_admin)])
+async def admin_backfill(req: BackfillRequest):
     if not PAGE_ACCESS_TOKEN:
         raise HTTPException(status_code=503, detail="PAGE_ACCESS_TOKEN not set")
 
