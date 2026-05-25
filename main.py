@@ -1,6 +1,7 @@
 import hmac
 import logging
 import os
+import random
 import re
 from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 
@@ -126,10 +127,28 @@ async def append_to_sheet(
         return {"error": str(e)}
 
 
+FLIRTY_SINGLE = [
+    "Cảm ơn nha 💕 Số {phone} mình lưu vào danh bạ với cái tên 'người dễ thương' nè 😊",
+    "Số đẹp ghê 😍 Mà mình nghĩ chủ nhân còn đẹp hơn. Tối nay nhắn tin được hong?",
+    "Lưu số {phone} rồi nha. Mong sớm có dịp gọi cho bạn để nghe giọng 💓",
+    "Có duyên ghê á. Số {phone} mình giữ kỹ lắm đó nha 😘",
+    "Bạn vừa làm ngày của mình tươi hẳn lên 🌸 Số {phone} đã được lưu vào trái tim 💕",
+    "Hân hạnh được lưu {phone} 😊 Cho mình xin một câu chuyện về bạn được không nè?",
+    "Ui, có số rồi 🥹 Hứa là sẽ không spam đâu, chỉ nhắn khi nhớ bạn thôi 💞",
+]
+
+FLIRTY_MULTI = [
+    "Ui, nhiều số thế 😍 Mình lưu hết nha:\n{phones}\nSố nào là số riêng của bạn vậy? 🥰",
+    "Bạn cho mình nhiều cách để liên lạc thế 💕 Mình lưu cả:\n{phones}\nMong sớm được nói chuyện với bạn 😘",
+    "Cảm ơn bạn nhiều nhé 💓 Số nào trong đây gọi bạn được vào buổi tối nhỉ?\n{phones}",
+]
+
+
 def format_reply(phones: List[str]) -> str:
     if len(phones) == 1:
-        return f"Đã nhận số điện thoại: {phones[0]}"
-    return "Đã nhận các số điện thoại:\n" + "\n".join(f"- {p}" for p in phones)
+        return random.choice(FLIRTY_SINGLE).format(phone=phones[0])
+    phones_str = "\n".join(f"- {p}" for p in phones)
+    return random.choice(FLIRTY_MULTI).format(phones=phones_str)
 
 
 @app.get("/api/v1/receive-message/messenger/{verify_token}")
